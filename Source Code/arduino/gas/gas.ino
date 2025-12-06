@@ -1,16 +1,23 @@
 #include <WiFi.h>
+#include <Firebase_ESP_Client.h>
 #include <WebServer.h>
-#include <ArduinoJson.h>
 #include <LiquidCrystal.h>
-#include <Servo.h>
-#include <Button.h>
-#include <HTTPClient.h>
-#include <WebSocketsClient.h>
+#include <ESP32Servo.h>
+// #include <Button.h>
 
 // ------------------------ WiFi ------------------------
-const char* ssid = "YourSSID";
-const char* password = "YourPASS";
-WebSocketsClient webSocket;
+const char* ssid = "iPhone";
+const char* password = "vannhucu";
+
+// ------------------------ Firebase ------------------------
+#define FIREBASE_HOST "iot-gas-6bce5-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define FIREBASE_AUTH "ys2pnoqLxJIzcuGSUnwhzjn2LAcKitjYaKVWNWp8"
+
+FirebaseData fbdo;
+FirebaseData stream;
+FirebaseData streamThreshold;
+FirebaseAuth auth;
+FirebaseConfig config;
 
 // ------------------------ LCD1602 ------------------------
 #define LCD_RS  15
@@ -23,230 +30,242 @@ LiquidCrystal My_LCD(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 
 // ------------------------ Buzzer ------------------------
 #define BUZZER  23
-#define BUZZER_ON 1
-#define BUZZER_OFF 0
+bool buzzerState = false;
 
 // ------------------------ Relay ------------------------
 #define RELAY1  22
 #define RELAY2  21
-bool relay1State = false;
-bool relay2State = false;
-bool autoManual = true; // AUTO = true, MANUAL = false
+bool fanState = false;
 
-// ------------------------ MQ2 & Fire Sensor ------------------------
+// ------------------------ MQ2 ------------------------
 #define SENSOR_MQ2  35
-#define SENSOR_FIRE 34
-#define SENSOR_FIRE_ON  0
-#define SENSOR_FIRE_OFF 1
-int mq2Threshold = 4000;
+int mq2Threshold = 5;
 
-// ------------------------ Servo ------------------------
+// ------------------------ Flame Sensor ------------------------
+#define FLAME_SENSOR 34
+bool fireDetected = false;
+
+
+// ------------------------ Servo ------------------------`
 Servo myservo1;
 Servo myservo2;
 #define SERVO1_PIN 25
 #define SERVO2_PIN 32
-int windowState = 0;
+bool windowState = false;
 
-// ------------------------ Nút nhấn ------------------------
-#define buttonPinMENU    5
-#define buttonPinDOWN    18
-#define buttonPinUP      19
-#define buttonPinONOFF   21
-Button buttonMENU(buttonPinMENU);
-Button buttonDOWN(buttonPinDOWN);
-Button buttonUP(buttonPinUP);
-Button buttonONOFF(buttonPinONOFF);
+// ------------------------ Button ------------------------
+// #define buttonPinMENU    5
+// #define buttonPinDOWN    18
+// #define buttonPinUP      19
+// #define buttonPinONOFF   21
+// Button buttonMENU(buttonPinMENU);
+// Button buttonDOWN(buttonPinDOWN);
+// Button buttonUP(buttonPinUP);
+// Button buttonONOFF(buttonPinONOFF);
 
-// ------------------------ Khai báo hàm ------------------------
-void ConnectWifi();
-int readGasSensor();
-int readFireSensor();
-void ShowGasOnOLED(int gasValue, int fireValue);
-void getData(String jsonStr);
-void onEventCallback(String event);
-void controlBuzzer(bool state);
-void controlRelayFan(bool relay1, bool relay2);
-void SendData(int gasValue, int fireValue, bool buzzerState, bool fanState);
-void handleButtons();
-void webSocketEvent(WStype_t type, uint8_t * payload, size_t length);
+// ----------------------------------------------------------------------
+// WiFi
+// ----------------------------------------------------------------------
+void ConnectWifi() {
+    Serial.println("Dang ket noi WiFi...");
+    WiFi.begin(ssid, password);
 
-// ------------------------ Setup ------------------------
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(400);
+        Serial.print(".");
+    }
+    Serial.println("\nDa ket noi WiFi!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+}
+
+// Đọc MQ2 và đổi sang %
+int readGasSensor() {
+    int rawValue = analogRead(SENSOR_MQ2);
+    return map(rawValue, 0, 4095, 0, 100);
+}
+// Đọc cảm biến lửa
+bool readFireSensor() {
+    int fireValue = digitalRead(FLAME_SENSOR);
+    fireDetected = (fireValue == LOW);  // LOW = có lửa
+    return fireDetected;
+}
+
+// Hiển thị LCD
+void ShowGasOnLCD(int gasPercent, bool warning) {
+    My_LCD.clear();
+    My_LCD.setCursor(0, 0);
+    My_LCD.print("Gas: ");
+    My_LCD.print(gasPercent);
+    My_LCD.print("%");
+
+    My_LCD.setCursor(0, 1);
+    if (warning)
+        My_LCD.print("WARNING!");
+    else
+        My_LCD.print("Gas Normal    ");
+}
+
+// ----------------------------------------------------------------------
+// Gửi Firebase
+// ----------------------------------------------------------------------
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 5000;
+
+void SendData(int gasPercent, bool warning, bool buzzerState, bool fanState) {
+    unsigned long now = millis();
+    if (now - lastSendTime < sendInterval) return;
+    lastSendTime = now;
+
+    Firebase.RTDB.setInt(&fbdo, "/gas/current/value", gasPercent);
+    Firebase.RTDB.setBool(&fbdo, "/gas/current/warning", warning);
+
+    Firebase.RTDB.setString(&fbdo, "/gas/device/buzzer", buzzerState ? "ON" : "OFF");
+    Firebase.RTDB.setString(&fbdo, "/gas/device/fan", fanState ? "ON" : "OFF");
+    Firebase.RTDB.setString(&fbdo, "/gas/device/servo", windowState ? "ON" : "OFF");
+
+    String ts = String(now);
+    Firebase.RTDB.setInt(&fbdo, "/gas/history/" + ts + "/value", gasPercent);
+    Firebase.RTDB.setInt(&fbdo, "/gas/history/" + ts + "/timestamp", now);
+
+    Serial.println("Đã gửi dữ liệu Firebase (ESP_Client)");
+}
+
+// ----------------------------------------------------------------------
+// Điều khiển thiết bị
+// ----------------------------------------------------------------------
+void controlBuzzer(int gasPercent, bool warning, bool serverControl) {
+    buzzerState = warning || serverControl;
+    digitalWrite(BUZZER, buzzerState ? HIGH : LOW);
+}
+
+void controlRelayFan(int gasPercent, bool warning, bool serverControl) {
+    fanState = warning || serverControl;
+    digitalWrite(RELAY1, fanState ? HIGH : LOW);
+}
+
+void controlServo(int gasPercent, bool warning, bool serverControl) {
+    bool openWindow = warning || serverControl;
+
+    if (openWindow && windowState == 0) {
+        myservo1.write(90);
+        myservo2.write(90);
+        windowState = 1;
+        Serial.println("Servo: Mo cua so");
+    }
+    else if (!openWindow && windowState == 1) {
+        myservo1.write(0);
+        myservo2.write(0);
+        windowState = 0;
+        Serial.println("Servo: Dong cua so");
+    }
+}
+
+// ----------------------------------------------------------------------
+// STREAM từ Firebase
+// ----------------------------------------------------------------------
+String fanStateServer = "OFF";
+String buzzerStateServer = "OFF";
+String windowStateServer = "OFF";
+
+void streamCallback(FirebaseStream data) {
+    String path = data.dataPath();
+    String value = data.stringData();
+
+    if (path == "/fan") {
+        fanStateServer = value;
+    }
+    if (path == "/buzzer") {
+        buzzerStateServer = value;
+    }
+    if (path == "/servo") {
+        windowStateServer = value;
+    }
+
+    Serial.print("[Stream] ");
+    Serial.print(path);
+    Serial.print(" = ");
+    Serial.println(value);
+}
+
+void streamCallbackThreshold(FirebaseStream data) {
+    String path = data.dataPath();
+
+    if (path == "/threshold") {
+        mq2Threshold = data.intData();
+        Serial.print("Threshold = ");
+        Serial.println(mq2Threshold);
+    }
+}
+
+
+void streamTimeout(bool timeout) {
+    if (timeout) Serial.println("Stream timeout, reconnecting...");
+}
+
+// ----------------------------------------------------------------------
+// SETUP
+// ----------------------------------------------------------------------
 void setup() {
     Serial.begin(115200);
 
     pinMode(BUZZER, OUTPUT);
     pinMode(RELAY1, OUTPUT);
-    pinMode(RELAY2, OUTPUT);
     pinMode(SENSOR_MQ2, INPUT);
-    pinMode(SENSOR_FIRE, INPUT);
+    pinMode(FLAME_SENSOR, INPUT);
 
-    // LCD
+
     My_LCD.begin(16, 2);
-    My_LCD.print("Init System...");
 
-    // Servo
     myservo1.attach(SERVO1_PIN);
     myservo2.attach(SERVO2_PIN);
 
-    // Nút nhấn
-    buttonMENU.begin();
-    buttonDOWN.begin();
-    buttonUP.begin();
-    buttonONOFF.begin();
+    // buttonMENU.begin();
+    // buttonDOWN.begin();
+    // buttonUP.begin();
+    // buttonONOFF.begin();
 
     ConnectWifi();
 
-    // WebSocket setup
-    webSocket.begin("yourserver.com", 81, "/ws"); // server và port WebSocket
-    webSocket.onEvent(webSocketEvent);
+    // Firebase config
+    config.database_url = FIREBASE_HOST;
+    config.signer.tokens.legacy_token = FIREBASE_AUTH;
+
+
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
+
+    // Bắt đầu stream
+    Firebase.RTDB.beginStream(&stream, "/gas/device");
+    Firebase.RTDB.setStreamCallback(&stream, streamCallback, streamTimeout);
+
+    Firebase.RTDB.beginStream(&streamThreshold, "/gas/status");
+    Firebase.RTDB.setStreamCallback(&streamThreshold, streamCallbackThreshold, streamTimeout);
 }
 
-// ------------------------ Loop ------------------------
+// ----------------------------------------------------------------------
+// LOOP
+// ----------------------------------------------------------------------
 void loop() {
-    int gasValue = readGasSensor();
-    int fireValue = readFireSensor();
+    int gasLevel = readGasSensor();
+    bool fireWarning = readFireSensor();
+    bool warning = gasLevel >= mq2Threshold;
+    if(fireWarning) warning = true;
 
-    ShowGasOnOLED(gasValue, fireValue);
+    bool serverBuzzer = (buzzerStateServer == "ON");
+    bool serverFan = (fanStateServer == "ON");
+    bool serverServo = (windowStateServer == "ON");
 
-    // Kiểm tra ngưỡng
-    if (gasValue >= mq2Threshold || fireValue == SENSOR_FIRE_ON) {
-        controlBuzzer(true);
-        controlRelayFan(true, true);
-    } else {
-        if (autoManual) { // chỉ tắt khi chế độ AUTO
-            controlBuzzer(false);
-            controlRelayFan(false, false);
-        }
-    }
+    controlBuzzer(gasLevel, warning, serverBuzzer);
+    controlRelayFan(gasLevel, warning, serverFan);
+    controlServo(gasLevel, warning, serverServo);
 
-    SendData(gasValue, fireValue, relay1State, relay2State);
+    ShowGasOnLCD(gasLevel, warning);
 
-    handleButtons(); // xử lý nút nhấn
+    SendData(gasLevel, warning, buzzerState, fanState);
 
-    webSocket.loop(); // xử lý WebSocket
-
-    delay(1000);
+    // buttonMENU.read();
+    // buttonDOWN.read();
+    // buttonUP.read();
+    // buttonONOFF.read();
 }
-
-// ------------------------ Hàm WiFi ------------------------
-void ConnectWifi() {
-    Serial.print("Connecting to WiFi...");
-    WiFi.begin(ssid, password);
-    int retry = 0;
-    while (WiFi.status() != WL_CONNECTED && retry < 20) {
-        delay(500);
-        Serial.print(".");
-        retry++;
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("Connected to WiFi!");
-    } else {
-        Serial.println("Failed to connect WiFi");
-    }
-}
-
-// ------------------------ Đọc cảm biến ------------------------
-int readGasSensor() {
-    return analogRead(SENSOR_MQ2);
-}
-
-int readFireSensor() {
-    return digitalRead(SENSOR_FIRE);
-}
-
-// ------------------------ Hiển thị LCD ------------------------
-void ShowGasOnOLED(int gasValue, int fireValue) {
-    My_LCD.clear();
-    My_LCD.setCursor(0, 0);
-    My_LCD.print("Gas:");
-    My_LCD.print(gasValue);
-    My_LCD.setCursor(0, 1);
-    if (gasValue >= mq2Threshold || fireValue == SENSOR_FIRE_ON) {
-        My_LCD.print("ALERT!");
-    } else {
-        My_LCD.print("SAFE");
-    }
-}
-
-// ------------------------ Xử lý dữ liệu từ server ------------------------
-void getData(String jsonStr) {
-    StaticJsonDocument<200> doc;
-    DeserializationError error = deserializeJson(doc, jsonStr);
-    if (!error) {
-        const char* type = doc["type"];
-        const char* message = doc["message"];
-        Serial.print("Type: "); Serial.println(type);
-        Serial.print("Message: "); Serial.println(message);
-    }
-}
-
-// ------------------------ Xử lý sự kiện WebSocket ------------------------
-void onEventCallback(String event) {
-    if (event == "BUZZER_ON") controlBuzzer(true);
-    else if (event == "BUZZER_OFF") controlBuzzer(false);
-    else if (event == "FAN_ON") controlRelayFan(true, true);
-    else if (event == "FAN_OFF") controlRelayFan(false, false);
-    else if (event == "AUTO_MODE") autoManual = true;
-    else if (event == "MANUAL_MODE") autoManual = false;
-}
-
-// ------------------------ Hàm WebSocket ------------------------
-void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
-    switch(type) {
-        case WStype_TEXT:
-            String msg = String((char*)payload);
-            onEventCallback(msg);
-            break;
-        default:
-            break;
-    }
-}
-
-// ------------------------ Điều khiển buzzer & relay ------------------------
-void controlBuzzer(bool state) {
-    digitalWrite(BUZZER, state ? BUZZER_ON : BUZZER_OFF);
-}
-
-void controlRelayFan(bool relay1, bool relay2) {
-    relay1State = relay1;
-    relay2State = relay2;
-    digitalWrite(RELAY1, relay1 ? HIGH : LOW);
-    digitalWrite(RELAY2, relay2 ? HIGH : LOW);
-}
-
-// ------------------------ Gửi dữ liệu HTTP ------------------------
-void SendData(int gasValue, int fireValue, bool buzzerState, bool fanState) {
-    if (WiFi.status() == WL_CONNECTED) {
-        HTTPClient http;
-        http.begin("http://yourserver.com/data");
-        http.addHeader("Content-Type", "application/json");
-        String payload;
-        payload += "{";
-        payload += "\"gas\":" + String(gasValue) + ",";
-        payload += "\"fire\":" + String(fireValue) + ",";
-        payload += "\"buzzer\":" + String(buzzerState ? 1 : 0) + ",";
-        payload += "\"fan\":" + String(fanState ? 1 : 0);
-        payload += "}";
-        int code = http.POST(payload);
-        Serial.print("HTTP Response code: "); Serial.println(code);
-        http.end();
-    }
-}
-
-// ------------------------ Xử lý nút nhấn ------------------------
-void handleButtons() {
-    buttonMENU.read();
-    buttonDOWN.read();
-    buttonUP.read();
-    buttonONOFF.read();
-
-    if (buttonONOFF.wasPressed()) {
-        autoManual = !autoManual; // đổi chế độ AUTO/MANUAL
-        Serial.print("Mode changed to: "); Serial.println(autoManual ? "AUTO" : "MANUAL");
-    }
-    // Thêm xử lý các nút khác nếu cần
-}
-```
-
----
-
