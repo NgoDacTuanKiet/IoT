@@ -38,22 +38,26 @@ export default function GasMonitor({ role }) {
             if (!data) return setHistory([]);
 
             const list = Object.values(data)
-                .map((item) => ({
-                    time: new Date(item.timestamp).toLocaleTimeString("vi-VN", {
-                        timeZone: "Asia/Ho_Chi_Minh",
-                        hour12: false
-                    }),
-                    value: item.value,
-                    rawTime: item.timestamp,
-                }))
+                .map((item) => {
+                    const ts = item.timestamp * 1000; 
+
+                    return {
+                        time: new Date(ts).toLocaleTimeString("vi-VN", {
+                            timeZone: "Asia/Ho_Chi_Minh",
+                            hour12: false   
+                        }),
+                        value: item.value,
+                        rawTime: ts,       
+                    };
+                })
                 .sort((a, b) => a.rawTime - b.rawTime)
                 .slice(-20);
 
             setHistory(list);
         });
+
         return unsub;
     }, []);
-
     useEffect(() => {
         const devRef = ref(db, "gas/device");
         const unsub = onValue(devRef, (snap) => {

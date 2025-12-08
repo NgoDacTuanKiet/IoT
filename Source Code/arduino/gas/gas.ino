@@ -3,11 +3,18 @@
 #include <WebServer.h>
 #include <LiquidCrystal.h>
 #include <ESP32Servo.h>
+#include "time.h"
 // #include <Button.h>
 
 // ------------------------ WiFi ------------------------
 const char* ssid = "iPhone";
 const char* password = "vannhucu";
+
+// ------------------------ Time ------------------------
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 7 * 3600; // GMT+7
+const int daylightOffset_sec = 0;
+
 
 // ------------------------ Firebase ------------------------
 #define FIREBASE_HOST "iot-gas-6bce5-default-rtdb.asia-southeast1.firebasedatabase.app"
@@ -63,9 +70,14 @@ bool windowState = false;
 // Button buttonUP(buttonPinUP);
 // Button buttonONOFF(buttonPinONOFF);
 
-// ----------------------------------------------------------------------
+// Lấy thời gian thực
+long getUnixTime() {
+    time_t now;
+    time(&now);
+    return now; // giây
+}
+
 // WiFi
-// ----------------------------------------------------------------------
 void ConnectWifi() {
     Serial.println("Dang ket noi WiFi...");
     WiFi.begin(ssid, password);
@@ -113,9 +125,11 @@ unsigned long lastSendTime = 0;
 const unsigned long sendInterval = 5000;
 
 void SendData(int gasPercent, bool warning, bool buzzerState, bool fanState) {
-    unsigned long now = millis();
-    if (now - lastSendTime < sendInterval) return;
-    lastSendTime = now;
+    unsigned long nowMs = millis();
+    if (nowMs - lastSendTime < sendInterval) return;
+    lastSendTime = nowMs;
+
+    long ts = getUnixTime();  // thời gian thực
 
     Firebase.RTDB.setInt(&fbdo, "/gas/current/value", gasPercent);
     Firebase.RTDB.setBool(&fbdo, "/gas/current/warning", warning);
@@ -124,12 +138,15 @@ void SendData(int gasPercent, bool warning, bool buzzerState, bool fanState) {
     Firebase.RTDB.setString(&fbdo, "/gas/device/fan", fanState ? "ON" : "OFF");
     Firebase.RTDB.setString(&fbdo, "/gas/device/servo", windowState ? "ON" : "OFF");
 
-    String ts = String(now);
-    Firebase.RTDB.setInt(&fbdo, "/gas/history/" + ts + "/value", gasPercent);
-    Firebase.RTDB.setInt(&fbdo, "/gas/history/" + ts + "/timestamp", now);
+    String key = String(ts);
 
-    Serial.println("Đã gửi dữ liệu Firebase (ESP_Client)");
+    Firebase.RTDB.setInt(&fbdo, "/gas/history/" + key + "/value", gasPercent);
+    Firebase.RTDB.setInt(&fbdo, "/gas/history/" + key + "/timestamp", ts);
+
+    Serial.print("Gửi Firebase, Time: ");
+    Serial.println(ts);
 }
+
 
 // ----------------------------------------------------------------------
 // Điều khiển thiết bị
@@ -226,6 +243,17 @@ void setup() {
     // buttonONOFF.begin();
 
     ConnectWifi();
+
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+    Serial.println("Đang đồng bộ thời gian...");
+    delay(2000);  // đợi NTP trả về
+
+    time_t now;
+    time(&now);
+    Serial.print("Thời gian hiện tại: ");
+    Serial.println(now);
+
 
     // Firebase config
     config.database_url = FIREBASE_HOST;

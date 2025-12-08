@@ -16,7 +16,7 @@ export default function UserManagement() {
         setToastType(type);
         setShowToast(true);
 
-        setTimeout(() => setShowToast(false), 2500); // tự ẩn
+        setTimeout(() => setShowToast(false), 2500); 
     };
 
     const [newUser, setNewUser] = useState({
@@ -66,6 +66,12 @@ export default function UserManagement() {
             phone: u.phone,
             role: u.role
         });
+    };
+
+    const roleNames = {
+        MEMBER: "Thành viên",
+        HOUSEHOLDHEAD: "Chủ hộ",
+        ADMIN: "Quản trị viên"
     };
 
     const saveEdit = async () => {
@@ -216,7 +222,7 @@ export default function UserManagement() {
                         <td>{u.password}</td>
                         <td>{u.name}</td>
                         <td>{u.phone}</td>
-                        <td>{u.role}</td>
+                        <td>{roleNames[u.role] || u.role}</td>
                         <td>
                             <button className="btn-edit" onClick={() => startEdit(u)}>Sửa</button>
                             <button className="btn-delete" onClick={() => removeUser(u.id)}>Xóa</button>
