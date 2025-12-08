@@ -4,7 +4,7 @@ import { ref, onValue, set } from "firebase/database";
 import GasChart from "./GasChart";
 import Controls from "./Controls";
 
-export default function GasMonitor() {
+export default function GasMonitor({ role }) {
     const [currentValue, setCurrentValue] = useState("-");
     const [history, setHistory] = useState([]);
 
@@ -12,9 +12,17 @@ export default function GasMonitor() {
     const [buzzer, setBuzzer] = useState("OFF");
     const [servo, setServo] = useState("OFF");
 
-    const [threshold, setThreshold] = useState(80);
+    const [threshold, setThreshold] = useState(30);
+    useEffect(() => {
+        const thrRef = ref(db, "gas/status/threshold");
+        const unsub = onValue(thrRef, (snap) => {
+            if (snap.exists()) {
+                setThreshold(snap.val());
+            }
+        });
+        return unsub;
+    }, []);
 
-    // 1. Giá trị hiện tại
     useEffect(() => {
         const currentRef = ref(db, "gas/current/value");
         const unsub = onValue(currentRef, (snap) => {
@@ -23,7 +31,6 @@ export default function GasMonitor() {
         return unsub;
     }, []);
 
-    // 2. Lịch sử
     useEffect(() => {
         const historyRef = ref(db, "gas/history");
         const unsub = onValue(historyRef, (snap) => {
@@ -32,7 +39,10 @@ export default function GasMonitor() {
 
             const list = Object.values(data)
                 .map((item) => ({
-                    time: new Date(item.timestamp).toLocaleTimeString("vi-VN"),
+                    time: new Date(item.timestamp).toLocaleTimeString("vi-VN", {
+                        timeZone: "Asia/Ho_Chi_Minh",
+                        hour12: false
+                    }),
                     value: item.value,
                     rawTime: item.timestamp,
                 }))
@@ -44,7 +54,6 @@ export default function GasMonitor() {
         return unsub;
     }, []);
 
-    // 3. Đọc trạng thái thiết bị
     useEffect(() => {
         const devRef = ref(db, "gas/device");
         const unsub = onValue(devRef, (snap) => {
@@ -57,7 +66,6 @@ export default function GasMonitor() {
         return unsub;
     }, []);
 
-    // 4. Hàm điều khiển thiết bị
     const toggleFan = () => {
         const newVal = fan === "ON" ? "OFF" : "ON";
         set(ref(db, "gas/device/fan"), newVal);
@@ -74,7 +82,7 @@ export default function GasMonitor() {
     };
 
     const updateThreshold = () => {
-        set(ref(db, "gas/threshold"), Number(threshold));
+        set(ref(db, "gas/status/threshold"), Number(threshold));
 
     };
 
@@ -118,13 +126,13 @@ export default function GasMonitor() {
                     toggleBuzzer={toggleBuzzer}
                     toggleServo={toggleServo}
                     updateThreshold={updateThreshold}
+                    role={role}
                 />
             </div>
 
             {/* Đồ thị */}
             <GasChart history={history} />
 
-            {/* Lịch sử */}
             <h3>Lịch sử đo (20 bản ghi gần nhất)</h3>
             {history.length === 0 ? (
                 <p>Đang chờ dữ liệu...</p>

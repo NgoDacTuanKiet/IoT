@@ -1,8 +1,6 @@
-// services/UserAPI.js – BẢN CHẠY NGON, KHÔNG CÒN LỖI JSON
 const API_URL = "http://localhost:8080/api";
 
 
-// GET USERS
 export async function getUsers() {
     debugger
     const res = await fetch(API_URL + "/users");
@@ -11,7 +9,7 @@ export async function getUsers() {
         throw new Error("Không thể tải danh sách người dùng");
     }
 
-    const text = await res.text(); // Đọc text trước
+    const text = await res.text();
     if (!text) return { users: {} };
 
     try {
@@ -22,7 +20,6 @@ export async function getUsers() {
     }
 }
 
-// CREATE USER
 export async function createUser(user) {
     const res = await fetch(API_URL + "/users", {
         method: "POST",
@@ -39,7 +36,23 @@ export async function createUser(user) {
     }
 }
 
-// DELETE USER
+export async function updateUser(id, user) {
+    const res = await fetch(API_URL + "/users/" + id, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(user),
+    });
+
+    const text = await res.text();
+    if (!text) return { message: "OK" };
+
+    try {
+        return JSON.parse(text);
+    } catch {
+        return { message: "OK" };
+    }
+}
+
 export async function deleteUser(id) {
     const res = await fetch(API_URL + "/users/" + id, {
         method: "DELETE",

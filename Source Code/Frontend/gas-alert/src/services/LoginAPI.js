@@ -1,6 +1,5 @@
 const API_URL = "http://localhost:8080/api";
 
-// THÊM LẠI HÀM LOGIN (bắt buộc cho trang Login)
 export async function login(username, password) {
     const res = await fetch(API_URL + "/auth/login", {
         method: "POST",
@@ -13,5 +12,5 @@ export async function login(username, password) {
         throw new Error(err || "Đăng nhập thất bại");
     }
 
-    return await res.json(); // backend trả về { username, role, message }
+    return await res.json();
 }

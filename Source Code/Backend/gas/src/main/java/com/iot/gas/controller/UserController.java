@@ -1,11 +1,14 @@
 package com.iot.gas.controller;
 
+import com.google.api.core.ApiFuture;
 import com.google.firebase.database.*;
 import com.iot.gas.model.User;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 
 @RestController
 @RequestMapping("/api/users")
@@ -13,9 +16,6 @@ public class UserController {
 
     private final DatabaseReference usersRef = FirebaseDatabase.getInstance().getReference("users");
 
-    // ================================
-    // 1) Lấy toàn bộ user
-    // ================================
     @GetMapping
     public Map<String, Object> getAllUsers() throws InterruptedException {
         Map<String, Object> response = new HashMap<>();
@@ -46,14 +46,36 @@ public class UserController {
         return response;
     }
 
-    // ================================
-    // 2) Tạo user mới
-    // ================================
     @PostMapping
-    public Map<String, Object> createUser(@RequestBody User user) {
-        String id = usersRef.push().getKey();
-
+    public Map<String, Object> createUser(@RequestBody User user) throws InterruptedException {
         Map<String, Object> response = new HashMap<>();
+
+        Query checkQuery = usersRef.orderByChild("username").equalTo(user.getUsername());
+
+        final boolean[] exists = {false};
+        CountDownLatch latch = new CountDownLatch(1);
+
+        checkQuery.addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot snapshot) {
+                exists[0] = snapshot.exists();
+                latch.countDown();
+            }
+
+            @Override
+            public void onCancelled(DatabaseError error) {
+                latch.countDown();
+            }
+        });
+
+        latch.await();
+
+        if (exists[0]) {
+            response.put("error", "Username đã tồn tại");
+            return response;
+        }
+
+        String id = usersRef.push().getKey();
         if (id == null) {
             response.put("error", "Cannot generate ID");
             return response;
@@ -66,9 +88,6 @@ public class UserController {
         return response;
     }
 
-    // ================================
-    // 3) Cập nhật user
-    // ================================
     @PutMapping("/{id}")
     public Map<String, Object> updateUser(@PathVariable String id, @RequestBody User user) {
         Map<String, Object> response = new HashMap<>();
@@ -79,9 +98,6 @@ public class UserController {
         return response;
     }
 
-    // ================================
-    // 4) Xóa user
-    // ================================
     @DeleteMapping("/{id}")
     public Map<String, String> deleteUser(@PathVariable String id) {
         usersRef.child(id).removeValueAsync();
